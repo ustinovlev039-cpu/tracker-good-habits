@@ -37,7 +37,6 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
-htmlcov/
 .tox/
 .pytest_cache/
 .mypy_cache/
@@ -192,3 +191,4 @@ fabric.properties
 .vscode/
 .DS_Store
 media/
+htmlcov/

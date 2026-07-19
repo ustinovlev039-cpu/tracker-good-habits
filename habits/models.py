@@ -5,7 +5,13 @@ from django.db.models import Q
 
 
 class Habit(models.Model):
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="habits")
+    """Хранит привычку пользователя и расписание напоминаний"""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="habits",
+    )
     place = models.CharField(max_length=255)
     time = models.TimeField()
     action = models.CharField(max_length=255)
@@ -28,11 +34,17 @@ class Habit(models.Model):
         help_text="Предполагаемое время выполнения в секундах.",
     )
     is_public = models.BooleanField(default=False)
-    next_notification_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    next_notification_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        """Задаёт сортировку и ограничения привычек"""
+
         ordering = ("time", "id")
         constraints = [
             models.CheckConstraint(
@@ -48,10 +60,15 @@ class Habit(models.Model):
                 name="habit_not_both_related_and_reward",
             ),
             models.CheckConstraint(
-                condition=Q(is_pleasant=False) | (Q(related_habit__isnull=True) & Q(reward="")),
+                condition=(
+                    Q(is_pleasant=False)
+                    | (Q(related_habit__isnull=True) & Q(reward=""))
+                ),
                 name="pleasant_habit_without_reward_or_related",
             ),
         ]
 
     def __str__(self):
+        """Возвращает название привычки и владельца"""
+
         return f"{self.action} — {self.owner}"

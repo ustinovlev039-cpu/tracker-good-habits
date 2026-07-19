@@ -4,14 +4,26 @@ from notifications.models import TelegramProfile
 
 
 class TelegramProfileSerializer(serializers.ModelSerializer):
+    """Преобразует статус привязки Telegram"""
+
     bot_link = serializers.SerializerMethodField()
 
     class Meta:
+        """Определяет публичные поля Telegram-профиля"""
+
         model = TelegramProfile
-        fields = ("is_verified", "username", "connection_code", "bot_link", "updated_at")
+        fields = (
+            "is_verified",
+            "username",
+            "connection_code",
+            "bot_link",
+            "updated_at",
+        )
         read_only_fields = fields
 
     def get_bot_link(self, obj) -> str | None:
+        """Формирует ссылку для привязки к боту"""
+
         request = self.context.get("request")
         username = getattr(request, "telegram_bot_username", "")
         if not username:

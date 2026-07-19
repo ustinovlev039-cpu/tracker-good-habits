@@ -1,6 +1,8 @@
-from rest_framework.pagination import PageNumberPagination
+from rest_framework.pagination import LimitOffsetPagination
 
 
-class HabitPagination(PageNumberPagination):
-    page_size = 5
-    page_size_query_param = None
+class HabitPagination(LimitOffsetPagination):
+    """Пагинация привычек в формате limit/offset/count/results"""
+
+    default_limit = 5
+    max_limit = 100

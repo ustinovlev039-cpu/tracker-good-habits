@@ -5,6 +5,8 @@ from .managers import UserManager
 
 
 class User(AbstractUser):
+    """Представляет пользователя с email вместо username"""
+
     username = None
     email = models.EmailField("email", unique=True)
 
@@ -14,4 +16,6 @@ class User(AbstractUser):
     objects = UserManager()
 
     def __str__(self):
+        """Возвращает email пользователя"""
+
         return self.email

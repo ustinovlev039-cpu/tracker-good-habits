@@ -3,15 +3,24 @@ from django.conf import settings
 
 
 class TelegramError(RuntimeError):
-    pass
+    """Описывает ошибку обращения к Telegram API"""
 
 
 def send_telegram_message(chat_id, text):
+    """Отправляет текстовое сообщение через Telegram API"""
+
     if not settings.TELEGRAM_BOT_TOKEN:
         raise TelegramError("TELEGRAM_BOT_TOKEN не задан.")
 
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-    response = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
+    url = (
+        "https://api.telegram.org/"
+        f"bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+    )
+    response = requests.post(
+        url,
+        json={"chat_id": chat_id, "text": text},
+        timeout=15,
+    )
     try:
         payload = response.json()
     except ValueError as exc:
@@ -22,6 +31,8 @@ def send_telegram_message(chat_id, text):
 
 
 def build_habit_message(habit):
+    """Формирует текст напоминания о привычке"""
+
     lines = [
         "Напоминание о привычке",
         "",
