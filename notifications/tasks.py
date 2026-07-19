@@ -11,6 +11,8 @@ from notifications.telegram import send_telegram_message, build_habit_message
 
 @shared_task
 def send_due_habit_reminders():
+    """Отправляет наступившие напоминания и обновляет расписание"""
+
     due_ids = list(
         Habit.objects.filter(
             next_notification_at__isnull=False,
@@ -50,7 +52,9 @@ def send_due_habit_reminders():
                 log.telegram_message_id = result.get("message_id")
                 log.error_message = ""
                 sent += 1
-            except Exception as exc:  # Celery должен сохранить ошибку и продолжить остальные привычки
+            # Задача сохраняет ошибку и продолжает обработку
+            # остальных привычек
+            except Exception as exc:
                 log.status = NotificationLog.Status.FAILED
                 log.error_message = str(exc)
                 failed += 1

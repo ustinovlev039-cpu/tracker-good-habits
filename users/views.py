@@ -6,5 +6,7 @@ from .serializers import RegistrationSerializer
 
 @extend_schema(tags=["Пользователи"], summary="Регистрация пользователя")
 class RegistrationView(generics.CreateAPIView):
+    """Регистрирует нового пользователя"""
+
     serializer_class = RegistrationSerializer
     permission_classes = [permissions.AllowAny]

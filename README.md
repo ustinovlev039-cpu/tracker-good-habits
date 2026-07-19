@@ -10,6 +10,11 @@
 - Celery Beat — запуск проверки напоминаний каждую минуту;
 - Telegram Bot API — доставка уведомлений.
 
+Рабочее приложение использует PostgreSQL. SQLite применяется только в памяти
+при автоматических тестах через `config.settings_test`. Docker в проекте не
+используется: PostgreSQL, Redis, Django, Celery и Telegram-бот запускаются
+локально.
+
 ## Что реализовано
 
 - регистрация пользователей по email;
@@ -201,10 +206,24 @@ Authorization: Bearer ACCESS_TOKEN
 }
 ```
 
-## Тесты
+## Запуск тестов
 
 ```bash
-python manage.py test
+python manage.py test --settings=config.settings_test
 ```
 
-Django автоматически создаст отдельную тестовую базу и удалит её после тестов.
+Тестовый набор содержит 48 тестов. Django создаёт отдельную SQLite-базу в
+памяти и удаляет её после тестов; основная PostgreSQL-конфигурация при этом не
+изменяется.
+
+## Запуск тестов с покрытием
+
+```bash
+coverage erase
+coverage run manage.py test --settings=config.settings_test
+coverage report -m
+coverage html
+```
+
+Фактическое покрытие после полного прогона — 93%. Минимальный допустимый порог
+в `.coveragerc` — 80%. HTML-отчёт открывается из `htmlcov/index.html`.
