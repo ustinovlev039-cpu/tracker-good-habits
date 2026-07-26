@@ -9,6 +9,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-habit_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-habit_password}
 
+    expose: 
+      - "5432"
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -25,6 +28,9 @@ services:
     image: redis:7-alpine
     container_name: habit_tracker_redis
     restart: unless-stopped
+
+    expose:
+      - "6379"
 
     volumes:
       - redis_data:/data
