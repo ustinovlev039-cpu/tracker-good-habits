@@ -10,7 +10,10 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 
+from config.views import health_check
+
 urlpatterns = [
+    path("health/", health_check, name="health"),
     path("admin/", admin.site.urls),
     path("api/users/", include("users.urls")),
     path(
