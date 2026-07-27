@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from habits.models import Habit
 from notifications.models import NotificationLog
-from notifications.telegram import send_telegram_message, build_habit_message
+from notifications.telegram import build_habit_message, send_telegram_message
 
 
 @shared_task

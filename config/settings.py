@@ -1,17 +1,37 @@
-from datetime import timedelta
 import os
+from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.getenv("SECRET_KEY", "unsafe-development-key")
-DEBUG = os.getenv("DEBUG", "1") == "1"
+
+def env_bool(name, default=False):
+    """Read a boolean environment variable."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def required_env(name):
+    """Return a required environment variable or fail with a clear message."""
+
+    value = os.getenv(name)
+    if not value:
+        raise ImproperlyConfigured(f"Environment variable {name} is required")
+    return value
+
+
+SECRET_KEY = required_env("SECRET_KEY")
+DEBUG = env_bool("DEBUG")
 ALLOWED_HOSTS = [
     item.strip()
-    for item in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    for item in os.getenv("ALLOWED_HOSTS", "").split(",")
     if item.strip()
 ]
 
@@ -62,14 +82,13 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-# Проект всегда использует локально установленный PostgreSQL.
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("POSTGRES_DB", "habit_tracker"),
-        "USER": os.getenv("POSTGRES_USER", "habit_user"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "habit_password"),
-        "HOST": os.getenv("POSTGRES_HOST", "127.0.0.1"),
+        "NAME": required_env("POSTGRES_DB"),
+        "USER": required_env("POSTGRES_USER"),
+        "PASSWORD": required_env("POSTGRES_PASSWORD"),
+        "HOST": os.getenv("POSTGRES_HOST", "db"),
         "PORT": os.getenv("POSTGRES_PORT", "5432"),
         "CONN_MAX_AGE": 60,
     }
@@ -104,6 +123,8 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"
 
@@ -142,11 +163,10 @@ CORS_ALLOWED_ORIGINS = [
     if item.strip()
 ]
 
-# Redis также запускается локально, без Docker.
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.getenv(
     "CELERY_RESULT_BACKEND",
-    "redis://127.0.0.1:6379/1",
+    "redis://redis:6379/1",
 )
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
@@ -162,3 +182,16 @@ CELERY_BEAT_SCHEDULE = {
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
+
+CSRF_TRUSTED_ORIGINS = [
+    item.strip()
+    for item in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if item.strip()
+]
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT")
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE")
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE")
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS")
+SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD")
