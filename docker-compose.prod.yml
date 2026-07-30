@@ -1,0 +1,38 @@
+x-production-logging: &production-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    restart: always
+    logging: *production-logging
+
+  redis:
+    restart: always
+    logging: *production-logging
+
+  migrate:
+    restart: "no"
+    logging: *production-logging
+
+  web:
+    restart: always
+    logging: *production-logging
+
+  celery:
+    restart: always
+    logging: *production-logging
+
+  celery-beat:
+    restart: always
+    logging: *production-logging
+
+  telegram-bot:
+    restart: always
+    logging: *production-logging
+
+  nginx:
+    restart: always
+    logging: *production-logging

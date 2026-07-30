@@ -13,12 +13,18 @@ from .settings import *  # noqa: E402,F403
 DEBUG = False
 ALLOWED_HOSTS = ["testserver", "localhost"]
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": ":memory:",
+if os.getenv("USE_SQLITE_FOR_TESTS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": ":memory:",
+        }
     }
-}
 
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.MD5PasswordHasher",

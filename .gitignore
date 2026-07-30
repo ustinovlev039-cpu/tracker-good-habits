@@ -57,6 +57,10 @@ coverage.xml
 *.log
 local_settings.py
 db.sqlite3
+*.sqlite3
+staticfiles/
+media/
+logs/
 
 # Flask stuff:
 instance/
@@ -85,6 +89,13 @@ celerybeat-schedule
 .env.*
 !.env.example
 !.env.template
+
+# Private keys and local SSH material
+.ssh/
+*.pem
+*.key
+id_rsa*
+id_ed25519*
 
 # virtualenv
 venv/
@@ -191,5 +202,4 @@ fabric.properties
 .idea
 .vscode/
 .DS_Store
-media/
 htmlcov/

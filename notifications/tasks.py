@@ -27,7 +27,7 @@ def send_due_habit_reminders():
     for habit_id in due_ids:
         with transaction.atomic():
             habit = (
-                Habit.objects.select_for_update()
+                Habit.objects.select_for_update(of=("self",))
                 .select_related("owner__telegram_profile", "related_habit")
                 .get(pk=habit_id)
             )

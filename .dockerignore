@@ -2,11 +2,14 @@
 .github
 .env
 .env.*
+!.env.example
+!.env.template
 .venv
 venv
 ENV
 **/__pycache__
-*.py[cod]
+*.pyc
+*.pyo
 .coverage
 coverage.xml
 htmlcov
@@ -17,5 +20,7 @@ htmlcov
 .vscode
 staticfiles
 media
+logs
 *.log
+*.sqlite3
 celerybeat-schedule*
