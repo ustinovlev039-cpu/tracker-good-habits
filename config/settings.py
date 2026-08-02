@@ -163,10 +163,15 @@ CORS_ALLOWED_ORIGINS = [
     if item.strip()
 ]
 
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+CELERY_BROKER_URL = os.getenv(
+    "CELERY_BROKER_URL",
+    f"redis://{REDIS_HOST}:{REDIS_PORT}/0",
+)
 CELERY_RESULT_BACKEND = os.getenv(
     "CELERY_RESULT_BACKEND",
-    "redis://redis:6379/1",
+    f"redis://{REDIS_HOST}:{REDIS_PORT}/1",
 )
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
