@@ -36,6 +36,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: lint
     services:
       postgres:
         image: postgres:16-alpine
@@ -140,6 +141,7 @@ jobs:
     name: Docker build
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    needs: tests
 
     steps:
       - name: Checkout repository
@@ -184,7 +186,6 @@ jobs:
       - lint
       - tests
       - docker-build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     concurrency:
       group: habit-tracker-production
       cancel-in-progress: false
