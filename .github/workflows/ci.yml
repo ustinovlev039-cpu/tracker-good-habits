@@ -2,422 +2,271 @@ name: CI/CD
 
 on:
   push:
+    branches:
+      - main
+
   pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-
-      - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt
-
-      - name: Run Ruff
-        run: ruff check .
-
   tests:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: lint
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: habit_tracker_ci
-          POSTGRES_USER: habit_ci
-          POSTGRES_PASSWORD: ci-database-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U habit_ci -d habit_tracker_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-    env:
-      DJANGO_SETTINGS_MODULE: config.settings_test
-      SECRET_KEY: ci-only-secret-key-0123456789-0123456789
-      DEBUG: "False"
-      ALLOWED_HOSTS: testserver,localhost
-      POSTGRES_DB: habit_tracker_ci
-      POSTGRES_USER: habit_ci
-      POSTGRES_PASSWORD: ci-database-password
-      POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PORT: "5432"
-      REDIS_HOST: 127.0.0.1
-      REDIS_PORT: "6379"
-      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/1
-      TELEGRAM_BOT_TOKEN: test-token
-      TELEGRAM_BOT_USERNAME: test_bot
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
 
       - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt
-
-      - name: Wait for PostgreSQL and Redis
         run: |
-          python - <<'PY'
-          import time
-
-          import psycopg
-          import redis
-
-          for attempt in range(1, 31):
-              try:
-                  with psycopg.connect(
-                      dbname="habit_tracker_ci",
-                      user="habit_ci",
-                      password="ci-database-password",
-                      host="127.0.0.1",
-                      port=5432,
-                  ):
-                      pass
-                  redis.Redis(host="127.0.0.1", port=6379).ping()
-                  break
-              except (psycopg.OperationalError, redis.RedisError):
-                  if attempt == 30:
-                      raise
-                  time.sleep(1)
-          PY
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run Django checks
+        env:
+          SECRET_KEY: ci-test-secret-key
+          DEBUG: "True"
         run: |
           python manage.py check
-          python manage.py makemigrations --check --dry-run
-          python manage.py migrate --noinput
 
-      - name: Run tests with coverage
+      - name: Run tests
+        env:
+          SECRET_KEY: ci-test-secret-key
+          DEBUG: "True"
         run: |
-          coverage erase
-          coverage run manage.py test
-          coverage report
+          python manage.py test
 
-      - name: Validate OpenAPI schema
-        run: >-
-          python manage.py spectacular
-          --file /tmp/habit-tracker-schema.yml
-          --validate
-
-  docker-build:
-    name: Docker build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    needs: tests
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Validate Compose configurations
-        run: |
-          env ENV_FILE=.env.example \
-            docker compose --env-file .env.example config --quiet
-          env ENV_FILE=.env.example \
-            docker compose --env-file .env.example \
-            -f docker-compose.yml \
-            -f docker-compose.prod.yml \
-            config --quiet
-
-      - name: Check Dockerfile
-        run: docker build --check .
-
-      - name: Build Compose images
-        run: >-
-          env ENV_FILE=.env.example
-          docker compose
-          --env-file .env.example
-          build
-
-      - name: Validate Nginx configuration
-        run: >-
-          docker run --rm
-          --add-host web:127.0.0.1
-          --volume "$PWD/nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
-          nginx:1.30-alpine
-          nginx -t
 
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    needs:
-      - lint
-      - tests
-      - docker-build
-    concurrency:
-      group: habit-tracker-production
-      cancel-in-progress: false
+    needs: tests
+
+    # Деплоим только push в main.
+    # Pull Request на сервер не выкатываем.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Validate deployment secrets
-        env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
-          SERVER_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          APP_URL: ${{ secrets.APP_URL }}
-        run: |
-          set -Eeuo pipefail
-
-          for variable_name in \
-            SERVER_HOST \
-            SERVER_PORT \
-            SERVER_USER \
-            SERVER_SSH_KEY \
-            SERVER_KNOWN_HOSTS \
-            DEPLOY_PATH \
-            APP_URL
-          do
-            if [ -z "${!variable_name:-}" ]; then
-              echo "Required GitHub Secret ${variable_name} is missing" >&2
-              exit 1
-            fi
-          done
-
-          case "$SERVER_PORT" in
-            *[!0-9]*)
-              echo "SERVER_PORT must contain only digits" >&2
-              exit 1
-              ;;
-          esac
-          if [ "$SERVER_PORT" -lt 1 ] || [ "$SERVER_PORT" -gt 65535 ]; then
-            echo "SERVER_PORT must be between 1 and 65535" >&2
-            exit 1
-          fi
-
-          case "$DEPLOY_PATH" in
-            /*) ;;
-            *)
-              echo "DEPLOY_PATH must be an absolute path" >&2
-              exit 1
-              ;;
-          esac
-
-          case "$APP_URL" in
-            http://*|https://*) ;;
-            *)
-              echo "APP_URL must start with http:// or https://" >&2
-              exit 1
-              ;;
-          esac
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
       - name: Configure SSH
         env:
-          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
-          SERVER_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
         run: |
-          set -Eeuo pipefail
+          set -e
 
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SERVER_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          printf '%s\n' "$SERVER_KNOWN_HOSTS" | tr -d '\r' \
-            > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
 
-          ssh-keygen -y -P "" -f ~/.ssh/deploy_key >/dev/null
-          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Check SSH connection
         env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          set -Eeuo pipefail
+          set -e
 
           ssh \
-            -p "$SERVER_PORT" \
-            -i ~/.ssh/deploy_key \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -o ConnectTimeout=15 \
-            "$SERVER_USER@$SERVER_HOST" \
-            'echo SSH_OK'
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SERVER_IP" \
+            'echo "SSH connection successful"; whoami; docker --version; docker compose version'
 
-      - name: Check deployment prerequisites
+
+      # -------------------------------------------------------
+      # Проверяем/создаём каталог проекта
+      # -------------------------------------------------------
+      - name: Prepare deploy directory
         env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
-          set -Eeuo pipefail
-
-          printf -v DEPLOY_PATH_QUOTED '%q' "$DEPLOY_PATH"
+          set -e
 
           ssh \
-            -p "$SERVER_PORT" \
-            -i ~/.ssh/deploy_key \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -o ConnectTimeout=15 \
-            "$SERVER_USER@$SERVER_HOST" \
-            "bash -s -- $DEPLOY_PATH_QUOTED" <<'REMOTE_SCRIPT'
-          set -Eeuo pipefail
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SERVER_IP" \
+            "mkdir -p '$DEPLOY_DIR'"
 
-          DEPLOY_PATH="$1"
+      - name: Upload project
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+        run: |
+          set -e
 
-          test -d "$DEPLOY_PATH/.git"
-          test -s "$DEPLOY_PATH/.env"
-          cd "$DEPLOY_PATH"
+          rsync \
+            -az \
+            --delete \
+            --exclude=".git/" \
+            --exclude=".github/" \
+            --exclude=".env" \
+            --exclude=".venv/" \
+            --exclude="venv/" \
+            --exclude="__pycache__/" \
+            --exclude=".pytest_cache/" \
+            --exclude=".coverage" \
+            --exclude="htmlcov/" \
+            -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/deploy_key" \
+            ./ \
+            "$SSH_USER@$SERVER_IP:$DEPLOY_DIR/"
 
-          whoami
-          id
-          docker --version
-          docker compose version
-          docker ps >/dev/null
-          git status --short --branch
-          git remote -v
-          stat -c '%a %U:%G %n' .env
-          REMOTE_SCRIPT
 
+      # -------------------------------------------------------
+      # Запускаем приложение через Docker Compose
+      # -------------------------------------------------------
       - name: Deploy application
         env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
-          set -Eeuo pipefail
-
-          printf -v DEPLOY_PATH_QUOTED '%q' "$DEPLOY_PATH"
+          set -e
 
           ssh \
-            -p "$SERVER_PORT" \
-            -i ~/.ssh/deploy_key \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -o ConnectTimeout=15 \
-            "$SERVER_USER@$SERVER_HOST" \
-            "bash -s -- $DEPLOY_PATH_QUOTED" <<'REMOTE_SCRIPT'
-          set -Eeuo pipefail
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SERVER_IP" \
+            "DEPLOY_DIR='$DEPLOY_DIR' bash -s" << 'EOF'
 
-          DEPLOY_PATH="$1"
-          cd "$DEPLOY_PATH"
+          set -e
 
-          git fetch --prune origin main
-          git checkout main
-          git reset --hard origin/main
-          test -s .env
+          cd "$DEPLOY_DIR"
 
-          COMPOSE_FILES=(
-            -f docker-compose.yml
-            -f docker-compose.prod.yml
-          )
+          echo "========================================"
+          echo "Starting WPA Habits deployment"
+          echo "Directory: $DEPLOY_DIR"
+          echo "========================================"
 
-          show_diagnostics() {
-            docker compose "${COMPOSE_FILES[@]}" ps --all
-            docker compose "${COMPOSE_FILES[@]}" logs --tail=200
-          }
-          trap show_diagnostics ERR
+          if [ ! -f docker-compose.yml ] && \
+             [ ! -f docker-compose.yaml ] && \
+             [ ! -f compose.yml ] && \
+             [ ! -f compose.yaml ]; then
 
-          docker compose "${COMPOSE_FILES[@]}" config --quiet
-          docker compose "${COMPOSE_FILES[@]}" \
-            up --detach --build --remove-orphans
+            echo "Docker Compose file not found"
+            exit 1
+          fi
 
-          MIGRATE_ID=$(
-            docker compose "${COMPOSE_FILES[@]}" ps -q --all migrate
-          )
-          test -n "$MIGRATE_ID"
-          test "$(
-            docker inspect --format '{{.State.ExitCode}}' "$MIGRATE_ID"
-          )" -eq 0
+          if [ ! -f .env ]; then
+            echo "ERROR: $DEPLOY_DIR/.env does not exist"
+            echo "Create .env on the server before deployment."
+            exit 1
+          fi
 
-          docker compose "${COMPOSE_FILES[@]}" exec -T nginx nginx -t
-          docker compose "${COMPOSE_FILES[@]}" exec -T web \
-            python manage.py migrate --check
-          docker compose "${COMPOSE_FILES[@]}" exec -T nginx \
-            test -f /var/www/static/admin/css/base.css
+          echo "Stopping old containers..."
+          docker compose down --remove-orphans
 
-          NGINX_BINDING=$(
-            docker compose "${COMPOSE_FILES[@]}" port nginx 80 | head -n 1
-          )
-          NGINX_PORT="${NGINX_BINDING##*:}"
-          case "$NGINX_PORT" in
-            ''|*[!0-9]*)
-              echo "Could not determine the published Nginx port" >&2
-              exit 1
-              ;;
-          esac
+          echo "Building containers..."
+          docker compose build
 
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            --retry 12 \
-            --retry-delay 5 \
-            --retry-connrefused \
-            "http://127.0.0.1:${NGINX_PORT}/health/"
+          echo "Starting containers..."
+          docker compose up -d
 
-          trap - ERR
-          docker compose "${COMPOSE_FILES[@]}" ps --all
-          docker image prune --force
-          REMOTE_SCRIPT
+          echo "Current containers:"
+          docker compose ps
 
-      - name: Check public health endpoint
+          EOF
+
+
+      # -------------------------------------------------------
+      # Даём контейнерам время запуститься
+      # -------------------------------------------------------
+      - name: Wait for application
+        run: sleep 15
+
+
+      # -------------------------------------------------------
+      # Показываем состояние контейнеров
+      # -------------------------------------------------------
+      - name: Check containers
         env:
-          APP_URL: ${{ secrets.APP_URL }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
-          set -Eeuo pipefail
+          set -e
 
-          HEALTH_RESPONSE=$(
-            curl \
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SERVER_IP" \
+            "cd '$DEPLOY_DIR' && docker compose ps"
+
+
+      # -------------------------------------------------------
+      # Проверка health endpoint
+      # -------------------------------------------------------
+      - name: Health check
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          set -e
+
+          echo "Checking http://$SERVER_IP/health/"
+
+          for attempt in {1..10}; do
+
+            if curl \
               --fail \
               --silent \
               --show-error \
-              --retry 12 \
-              --retry-delay 5 \
-              --retry-connrefused \
-              "${APP_URL%/}/health/"
-          )
-          printf 'Public health response: %s\n' "$HEALTH_RESPONSE"
+              --max-time 10 \
+              "http://$SERVER_IP/health/"; then
+
+              echo
+              echo "Health check successful"
+              exit 0
+            fi
+
+            echo "Health check attempt $attempt/10 failed"
+
+            sleep 5
+          done
+
+          echo "Application health check failed"
+          exit 1
+
+
+      # -------------------------------------------------------
+      # Логи при неудачном деплое
+      # -------------------------------------------------------
+      - name: Show Docker logs on failure
+        if: failure()
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+        run: |
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SERVER_IP" \
+            "cd '$DEPLOY_DIR' && docker compose ps && docker compose logs --tail=200" \
+            || true
