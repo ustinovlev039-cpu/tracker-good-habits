@@ -178,6 +178,17 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+CELERY_TASK_ALWAYS_EAGER = env_bool(
+    "CELERY_TASK_ALWAYS_EAGER",
+    False,
+)
+
+CELERY_TASK_EAGER_PROPAGATES = env_bool(
+    "CELERY_TASK_EAGER_PROPAGATES",
+    False,
+)
+
 CELERY_BEAT_SCHEDULE = {
     "send-due-habit-reminders-every-minute": {
         "task": "notifications.tasks.send_due_habit_reminders",
