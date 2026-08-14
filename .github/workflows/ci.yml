@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
 
   pull_request:
     branches:
@@ -16,137 +17,142 @@ permissions:
 
 
 jobs:
-  tests:
-    name: Docker Tests
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
-      - name: Prepare CI environment
+      - name: Install dependencies
         run: |
-          if [ -f .env.example ]; then
-            cp .env.example .env
-          else
-            touch .env
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
 
-          cat >> .env << 'EOF'
-
-          SECRET_KEY=github-actions-ci-secret-key
-          DEBUG=True
-
-          POSTGRES_DB=habits_test
-          POSTGRES_USER=habits_user
-          POSTGRES_PASSWORD=habits_password
-          POSTGRES_HOST=db
-          POSTGRES_PORT=5432
-
-          REDIS_HOST=redis
-          REDIS_PORT=6379
-
-          CELERY_BROKER_URL=redis://redis:6379/0
-          CELERY_RESULT_BACKEND=redis://redis:6379/0
-
-          CELERY_TASK_ALWAYS_EAGER=True
-          CELERY_TASK_EAGER_PROPAGATES=True
-
-          ALLOWED_HOSTS=localhost,127.0.0.1
-          EOF
-
-
-      - name: Check Docker
+      - name: Run Ruff
         run: |
-          docker --version
-          docker compose version
+          ruff check .
 
-      - name: Build containers
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      SECRET_KEY: ci-test-secret-key-only-0123456789-0123456789
+      POSTGRES_DB: test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+
+      # Для CI используем SQLite.
+      # config/settings_test.py уже это поддерживает.
+      USE_SQLITE_FOR_TESTS: "True"
+
+      TELEGRAM_BOT_TOKEN: test-token
+      TELEGRAM_BOT_USERNAME: test_bot
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
         run: |
-          docker compose build
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
 
-      - name: Start containers
+      - name: Django system check
         run: |
-          docker compose up -d
+          python manage.py check \
+            --settings=config.settings_test
 
-          echo "Waiting for containers..."
-          sleep 15
-
-          docker compose ps
-
-
-      - name: Find Django service
+      - name: Check migrations
         run: |
-          DJANGO_SERVICE=""
-
-          for service in $(docker compose config --services); do
-
-            if docker compose exec -T "$service" \
-              sh -c 'test -f manage.py' \
-              >/dev/null 2>&1; then
-
-              DJANGO_SERVICE="$service"
-              break
-            fi
-
-          done
-
-          if [ -z "$DJANGO_SERVICE" ]; then
-            echo "Could not find Django container with manage.py"
-            docker compose ps
-            docker compose logs --tail=100
-            exit 1
-          fi
-
-          echo "Django service: $DJANGO_SERVICE"
-
-          echo "DJANGO_SERVICE=$DJANGO_SERVICE" >> "$GITHUB_ENV"
-
-      - name: Django check
-        run: |
-          docker compose exec -T \
-            "$DJANGO_SERVICE" \
-            python manage.py check
-
-
-      - name: Run migrations
-        run: |
-          docker compose exec -T \
-            "$DJANGO_SERVICE" \
-            python manage.py migrate --noinput
+          python manage.py makemigrations \
+            --check \
+            --dry-run \
+            --settings=config.settings_test
 
       - name: Run tests
         run: |
-          docker compose exec -T \
-            "$DJANGO_SERVICE" \
-            python manage.py test
+          coverage erase
 
-      - name: Show Docker logs
-        if: failure()
-        run: |
-          docker compose ps
-          docker compose logs --tail=200
+          coverage run \
+            manage.py test \
+            --settings=config.settings_test
 
-      - name: Cleanup
-        if: always()
+          coverage report
+
+      - name: Validate OpenAPI schema
         run: |
-          docker compose down -v --remove-orphans
+          python manage.py spectacular \
+            --settings=config.settings_test \
+            --file /tmp/habit-tracker-schema.yml \
+            --validate
+
+  docker_build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Docker environment
+        run: |
+          cp .env.example .env
+
+      - name: Validate Docker Compose
+        run: |
+          docker compose config --quiet
+
+      - name: Check Dockerfile
+        run: |
+          docker build --check .
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag "habit-tracker:${GITHUB_SHA}" \
+            .
 
   deploy:
-    name: Deploy to Cloud.ru
-
+    name: Deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     needs:
+      - lint
       - tests
+      - docker_build
 
     if: |
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
 
-    steps:
+    concurrency:
+      group: habit-tracker-production
+      cancel-in-progress: false
 
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -155,16 +161,23 @@ jobs:
           SSH_KEY: ${{ secrets.SSH_KEY }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+          set -e
+
+          install -m 700 -d ~/.ssh
 
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
 
           chmod 600 ~/.ssh/deploy_key
 
-          ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
+          ssh-keyscan \
+            -H \
+            "$SERVER_IP" \
+            > ~/.ssh/known_hosts
 
           chmod 600 ~/.ssh/known_hosts
+
+          test -s ~/.ssh/deploy_key
+          test -s ~/.ssh/known_hosts
 
       - name: Check SSH connection
         env:
@@ -196,105 +209,115 @@ jobs:
             "$SSH_USER@$SERVER_IP" \
             "mkdir -p '$DEPLOY_DIR'"
 
-
-      - name: Upload project
+      - name: Copy project to server
         env:
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SSH_USER: ${{ secrets.SSH_USER }}
           DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
           rsync \
-            -az \
+            --archive \
+            --compress \
             --delete \
-            --exclude=".git/" \
-            --exclude=".github/" \
-            --exclude=".env" \
-            --exclude=".venv/" \
-            --exclude="venv/" \
-            --exclude="__pycache__/" \
-            --exclude=".pytest_cache/" \
-            --exclude=".coverage" \
-            --exclude="htmlcov/" \
+            --filter='P .env' \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.env' \
+            --exclude='.venv/' \
+            --exclude='venv/' \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
+            --exclude='.coverage' \
+            --exclude='coverage.xml' \
+            --exclude='htmlcov/' \
+            --exclude='staticfiles/' \
+            --exclude='media/' \
+            --exclude='celerybeat-schedule*' \
             -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/deploy_key" \
             ./ \
             "$SSH_USER@$SERVER_IP:$DEPLOY_DIR/"
 
-      - name: Deploy Docker containers
+      - name: Build and start application
         env:
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SSH_USER: ${{ secrets.SSH_USER }}
           DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
-
           ssh \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SERVER_IP" \
-            "DEPLOY_DIR='$DEPLOY_DIR' bash -s" << 'EOF'
+            "bash -s -- '$DEPLOY_DIR'" <<'REMOTE_SCRIPT'
 
-          set -e
+          set -Eeuo pipefail
+
+          DEPLOY_DIR="$1"
 
           cd "$DEPLOY_DIR"
 
-          echo "======================================="
-          echo "Deploying WPA Habits"
-          echo "======================================="
+          echo "======================================"
+          echo "Deploying Habit Tracker"
+          echo "Directory: $DEPLOY_DIR"
+          echo "======================================"
 
-          if [ ! -f .env ]; then
-            echo "ERROR: $DEPLOY_DIR/.env not found"
+          if [ ! -s .env ]; then
+            echo "ERROR: $DEPLOY_DIR/.env does not exist"
+            echo "Create production .env on the server."
             exit 1
           fi
 
-          echo "Stopping old containers..."
+          echo "Validating Docker Compose..."
 
-          docker compose down --remove-orphans
+          docker compose config --quiet
 
+          echo "Building and starting containers..."
 
-          echo "Building new containers..."
+          docker compose up \
+            --detach \
+            --build \
+            --remove-orphans
 
-          docker compose build
+          echo "Waiting for application..."
 
+          for attempt in $(seq 1 30); do
 
-          echo "Starting containers..."
+            if docker compose exec -T nginx \
+              wget \
+                --quiet \
+                --tries=1 \
+                --spider \
+                http://127.0.0.1/health/; then
 
-          docker compose up -d
+              echo "Application is healthy"
 
+              docker compose ps
 
-          echo "Waiting for containers..."
+              docker image prune --force
 
-          sleep 15
+              exit 0
+            fi
 
+            echo "Health check attempt ${attempt}/30"
 
-          echo "Containers:"
+            sleep 5
+
+          done
+
+          echo "Application failed health check"
 
           docker compose ps
+          docker compose logs --tail=200
 
-          EOF
+          exit 1
 
-      - name: Check deployed containers
-        env:
-          SERVER_IP: ${{ secrets.SERVER_IP }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
-        run: |
+          REMOTE_SCRIPT
 
-          ssh \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -i ~/.ssh/deploy_key \
-            "$SSH_USER@$SERVER_IP" \
-            "cd '$DEPLOY_DIR' && docker compose ps"
-
-
-      - name: Health check
+      - name: Check public health endpoint
         env:
           SERVER_IP: ${{ secrets.SERVER_IP }}
         run: |
-
-          echo "Checking application..."
-
-          for attempt in {1..10}; do
+          for attempt in $(seq 1 10); do
 
             if curl \
               --fail \
@@ -304,19 +327,19 @@ jobs:
               "http://$SERVER_IP/health/"; then
 
               echo
-              echo "Application is healthy"
+              echo "Public health check successful"
               exit 0
-
             fi
 
-            echo "Attempt $attempt failed"
+            echo "Public health check attempt ${attempt}/10"
 
             sleep 5
 
           done
 
-          echo "Health check failed"
+          echo "Public health endpoint is unavailable"
           exit 1
+
 
       - name: Show deployment logs
         if: failure()
@@ -325,7 +348,6 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
         run: |
-
           ssh \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
